@@ -47,3 +47,30 @@ void operator delete(void* ptr, std::size_t) noexcept {
 void operator delete[](void* ptr, std::size_t) noexcept {
     std::free(ptr);
 }
+
+// The nothrow overloads matter, not just for completeness: libstdc++'s internal
+// std::stable_sort (used by GoogleTest to order tests) allocates its temp buffer via
+// std::get_temporary_buffer, which calls operator new(size, nothrow) directly. Without an
+// override here, that allocation goes through ASan's own default nothrow-new instead of this
+// file's malloc-backed one, and gets freed via the (overridden) sized operator delete above
+// -- an alloc-dealloc-mismatch ASan correctly flags as a real bug. This didn't surface on
+// macOS/libc++ locally because its stable_sort doesn't use this code path; only caught once
+// pushed to CI's gcc/clang-on-libstdc++ Linux builds.
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+    if (liquibook::testing::counting_enabled().load(std::memory_order_relaxed)) {
+        liquibook::testing::allocation_counter().fetch_add(1, std::memory_order_relaxed);
+    }
+    return std::malloc(size);
+}
+
+void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
+    return ::operator new(size, std::nothrow);
+}
+
+void operator delete(void* ptr, const std::nothrow_t&) noexcept {
+    std::free(ptr);
+}
+
+void operator delete[](void* ptr, const std::nothrow_t&) noexcept {
+    std::free(ptr);
+}
