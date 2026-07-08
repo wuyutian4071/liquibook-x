@@ -100,7 +100,10 @@ private:
                 }
             }
 
-            level = book_.next_level_after(level->price, order.is_buy);
+            // Walking the *opposite* side from the incoming order (a buy matches asks, so
+            // next_level_after's own is_buy side-selector must be false here) -- the same
+            // side chosen by best_ask_level()/best_bid_level() above.
+            level = book_.next_level_after(level->price, !order.is_buy);
         }
 
         return total;

@@ -178,3 +178,131 @@ TEST(MatchingEngine, IocWithNoLiquidityIsFullyKilled) {
     EXPECT_EQ(handler.kills[0].unfilled_quantity, 50u);
     EXPECT_EQ(book.order_count(), 0u);
 }
+
+TEST(MatchingEngine, FokThatCanFullyFillExecutesCompletely) {
+    OrderBook book = make_book();
+    ASSERT_TRUE(book.add_order(1, kRef, 60, false));
+    ASSERT_TRUE(book.add_order(2, kRef + 5, 40, false));
+
+    RecordingHandler handler;
+    MatchingEngine engine(book, handler);
+    engine.submit(IncomingOrder {3, kRef + 5, 100, true, OrderType::FOK});
+
+    ASSERT_EQ(handler.fills.size(), 2u);
+    EXPECT_EQ(handler.fills[0].quantity, 60u);
+    EXPECT_EQ(handler.fills[1].quantity, 40u);
+    EXPECT_TRUE(handler.kills.empty());
+    EXPECT_EQ(book.order_count(), 0u);
+}
+
+TEST(MatchingEngine, FokThatCannotFullyFillProducesZeroFillsAndZeroMutation) {
+    OrderBook book = make_book();
+    ASSERT_TRUE(book.add_order(1, kRef, 60, false)); // only 60 available, order wants 100
+
+    const auto before_order_count = book.order_count();
+    const auto before_shares = book.shares_at(kRef, false);
+    const auto before_best_bid = book.best_bid();
+    const auto before_best_ask = book.best_ask();
+
+    RecordingHandler handler;
+    MatchingEngine engine(book, handler);
+    engine.submit(IncomingOrder {2, kRef, 100, true, OrderType::FOK});
+
+    EXPECT_TRUE(handler.fills.empty());
+    ASSERT_EQ(handler.kills.size(), 1u);
+    EXPECT_EQ(handler.kills[0].order_ref, 2u);
+    EXPECT_EQ(handler.kills[0].unfilled_quantity, 100u); // the *entire* quantity, zero filled
+
+    // Atomicity: every observable piece of book state is bit-for-bit unchanged.
+    EXPECT_EQ(book.order_count(), before_order_count);
+    EXPECT_EQ(book.shares_at(kRef, false), before_shares);
+    EXPECT_EQ(book.best_bid(), before_best_bid);
+    EXPECT_EQ(book.best_ask(), before_best_ask);
+}
+
+TEST(MatchingEngine, FokRejectionRespectsThePriceLimitNotJustTotalVolume) {
+    OrderBook book = make_book();
+    // 100 shares are resting in total, but only reachable at a price the incoming FOK isn't
+    // willing to pay -- this must still be rejected, not filled by ignoring the limit.
+    ASSERT_TRUE(book.add_order(1, kRef + 20, 100, false));
+
+    RecordingHandler handler;
+    MatchingEngine engine(book, handler);
+    engine.submit(IncomingOrder {2, kRef, 100, true, OrderType::FOK});
+
+    EXPECT_TRUE(handler.fills.empty());
+    ASSERT_EQ(handler.kills.size(), 1u);
+    EXPECT_EQ(handler.kills[0].unfilled_quantity, 100u);
+    EXPECT_EQ(book.shares_at(kRef + 20, false), 100u); // untouched
+}
+
+TEST(MatchingEngine, SelfTradePreventionOffByDefaultAllowsMatchingOwnOrder) {
+    OrderBook book = make_book();
+    ASSERT_TRUE(book.add_order(1, kRef, 50, false, /*trader_id=*/9));
+
+    RecordingHandler handler;
+    MatchingEngine engine(book, handler); // prevent_self_trade defaults to false
+    engine.submit(IncomingOrder {2, kRef, 50, true, OrderType::Limit, /*trader_id=*/9});
+
+    ASSERT_EQ(handler.fills.size(), 1u);
+    EXPECT_EQ(handler.fills[0].resting_ref, 1u);
+    EXPECT_EQ(book.order_count(), 0u);
+}
+
+TEST(MatchingEngine, SelfTradePreventionOnSkipsOwnOrderAndMatchesNextEligible) {
+    OrderBook book = make_book();
+    ASSERT_TRUE(book.add_order(1, kRef, 50, false, /*trader_id=*/9));  // same trader as incoming
+    ASSERT_TRUE(book.add_order(2, kRef, 50, false, /*trader_id=*/11)); // different trader
+
+    RecordingHandler handler;
+    MatchingEngine engine(book, handler, /*prevent_self_trade=*/true);
+    engine.submit(IncomingOrder {3, kRef, 50, true, OrderType::Limit, /*trader_id=*/9});
+
+    ASSERT_EQ(handler.fills.size(), 1u);
+    EXPECT_EQ(handler.fills[0].resting_ref, 2u); // order 1 skipped despite arriving first
+    EXPECT_EQ(book.order_count(), 1u);
+    EXPECT_EQ(book.shares_at(kRef, false), 50u); // order 1 (skipped) is still resting, untouched
+}
+
+TEST(MatchingEngine, SelfTradePreventionOnWithNoOtherLiquidityRestsEntirely) {
+    OrderBook book = make_book();
+    ASSERT_TRUE(book.add_order(1, kRef, 50, false, /*trader_id=*/9));
+
+    RecordingHandler handler;
+    MatchingEngine engine(book, handler, /*prevent_self_trade=*/true);
+    engine.submit(IncomingOrder {2, kRef, 50, true, OrderType::Limit, /*trader_id=*/9});
+
+    EXPECT_TRUE(handler.fills.empty());
+    ASSERT_EQ(handler.rests.size(), 1u);
+    EXPECT_EQ(handler.rests[0].quantity, 50u);
+    EXPECT_EQ(book.shares_at(kRef, false), 50u); // order 1 untouched
+    EXPECT_EQ(book.shares_at(kRef, true), 50u);  // order 2 now resting alongside it
+}
+
+TEST(MatchingEngine, SelfTradePreventionDoesNotBlockOrdersWithNoTraderId) {
+    OrderBook book = make_book();
+    ASSERT_TRUE(book.add_order(1, kRef, 50, false)); // trader_id defaults to 0
+
+    RecordingHandler handler;
+    MatchingEngine engine(book, handler, /*prevent_self_trade=*/true);
+    engine.submit(IncomingOrder {2, kRef, 50, true, OrderType::Limit}); // also 0
+
+    ASSERT_EQ(handler.fills.size(), 1u); // 0 == 0 is never treated as a self-trade
+    EXPECT_EQ(book.order_count(), 0u);
+}
+
+TEST(MatchingEngine, SelfTradePreventionAffectsFokAvailabilityCheck) {
+    OrderBook book = make_book();
+    ASSERT_TRUE(book.add_order(1, kRef, 100, false, /*trader_id=*/9)); // blocked by STP
+
+    RecordingHandler handler;
+    MatchingEngine engine(book, handler, /*prevent_self_trade=*/true);
+    engine.submit(IncomingOrder {2, kRef, 100, true, OrderType::FOK, /*trader_id=*/9});
+
+    // The only resting liquidity belongs to the same trader -- FOK must see 0 available and
+    // reject, not count blocked liquidity as if it were fillable.
+    EXPECT_TRUE(handler.fills.empty());
+    ASSERT_EQ(handler.kills.size(), 1u);
+    EXPECT_EQ(handler.kills[0].unfilled_quantity, 100u);
+    EXPECT_EQ(book.shares_at(kRef, false), 100u); // untouched
+}
