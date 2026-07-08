@@ -23,11 +23,11 @@
 
 ## Status
 
-Built milestone by milestone. Current: **M4 — the order book**: a single-symbol limit order
-book combining M2's ITCH messages and M3's three containers for the first time — a flat
-array of price levels (with a fallback map for outliers), incrementally-tracked best bid/ask,
-verified both by direct unit tests and by a differential test against an independent
-reference implementation on a random operation stream.
+Built milestone by milestone. Current: **M5 — the matching engine**: `MatchingEngine`
+matches incoming Limit/Market/IOC/FOK orders against M4's `OrderBook` in strict price-time
+priority, with Fill-Or-Kill atomicity (verified as zero mutation on rejection, not just zero
+fills) and optional self-trade prevention — exercised by direct scenario tests plus a
+conservation check across a random stream of all four order types.
 
 | Milestone | Scope | State |
 |-----------|-------|-------|
@@ -35,7 +35,7 @@ reference implementation on a random operation stream.
 | M2 | ITCH 5.0 parser + synthetic data generator + parser throughput benchmark | ✅ |
 | M3 | Object pool, intrusive list, open-addressing hash map | ✅ |
 | M4 | OrderBook with ITCH-driven book building + differential tests vs. a reference `std::map` book | ✅ |
-| M5 | MatchingEngine: limit/market/IOC/FOK, price-time priority | ⬜ |
+| M5 | MatchingEngine: limit/market/IOC/FOK, price-time priority | ✅ |
 | M6 | Lock-free SPSC ring buffer + two-thread pipeline + TSan | ⬜ |
 | M7 | Full benchmark suite + `BENCHMARKS.md` (methodology + results) | ⬜ |
 | M8 | Polished README, architecture diagram, design-decisions doc | ⬜ |
@@ -145,6 +145,58 @@ Three kinds of verification, matching the milestone's own requirements:
 - **An ITCH-driven integration test** (`test_order_book_itch_integration.cpp`) — a real
   synthetic ITCH stream (M2's `generate()`), decoded with M2's real `decode()`, fed through
   `OrderBook::apply()` end to end, checked against independently-tracked expected state.
+
+### The matching engine (M5)
+
+`engine/matching_engine.hpp`'s `MatchingEngine` decides how an *incoming* order interacts
+with the book — the piece M4 deliberately didn't build: `OrderBook` maintains resting state,
+but has no notion of "does this new order cross, and against whom." `MatchingEngine` walks
+the opposite side from `OrderBook`'s (M5-added) `best_bid_level()`/`best_ask_level()`, checks
+the price still crosses (skipped for Market, which crosses at any price), and takes resting
+orders in FIFO order via the existing `IntrusiveList` iteration — reusing `OrderBook`'s own
+`execute_order()`/`add_order()` for every state change rather than touching `Order`/
+`PriceLevel` internals directly. Four order types, each with its own remainder rule: `Limit`
+rests any unfilled quantity; `Market` and `IOC` discard it; `FOK` fills completely or not at
+all.
+
+**Fill-Or-Kill's atomicity** is the one that needs its own explanation: before executing
+anything, a read-only `available_liquidity()` pass sums matchable resting shares across
+*multiple* price levels via a new `OrderBook::next_level_after()` — deliberately not
+`best_ask_level()` re-queried in a loop, which would return the same unconsumed level forever
+since a dry run never actually executes. Only if that confirms enough liquidity does the real
+(mutating) walk run; otherwise the order is rejected with zero fills and — verified directly
+in tests, not inferred — zero change to any `OrderBook` observable at all.
+
+**Self-trade prevention** is off by default (a resting and an incoming order from the same
+`trader_id` — a plain `uint32_t`, 0 meaning "no trader," added to `Order` in M5 for this
+purpose alone) can match freely. Switched on, a blocked resting order is *skipped*, not
+cancelled: the incoming order matches the next eligible order in the queue, even if that
+means a later-arrived order at the same price trades first — a real, standard exception to
+strict FIFO, not a bug, and the skipped order is still resting, untouched, afterward.
+
+The callback interface (`FillEvent`/`RestEvent`/`KillEvent`, in `engine/events.hpp`) is a
+compile-time template parameter, not `std::function` and not CRTP inheritance: a plain object
+providing `on_fill`/`on_rest`/`on_kill`, invoked directly with no vtable — simpler to use in
+tests (pass a handler object, no need to inherit from the engine) while still satisfying "not
+`std::function` on the hot path."
+
+**A real bug the tests caught immediately**, the second one this project's differential/
+scenario-testing discipline has caught (see M4's above): the first `available_liquidity()`
+called `next_level_after(price, order.is_buy)` — but that parameter selects which *book* side
+to scan (bids vs. asks), not which side the incoming order itself is on. A buy order matches
+against asks, so the correct call is `next_level_after(price, !order.is_buy)`. The very first
+multi-level FOK test failed immediately (0 fills instead of the expected 2, across two price
+levels) because the liquidity check walked into the empty bid side after the first ask level
+and gave up early. Fixed and commented with the exact reasoning.
+
+Verification: 15 direct scenario tests (partial/exact fills, multi-level walks, FIFO priority
+verified via fill order not just final state, Market/IOC partial-fill-then-discard, FOK
+success/failure/price-limit-respected, self-trade prevention on/off/no-other-liquidity/zero-
+trader-id, and STP's effect on the FOK liquidity check specifically) plus a conservation test
+(`test_matching_engine_conservation.cpp`) — 500 random orders across all four types, asserting
+every single `submit()` call's incoming quantity is accounted for exactly once as filled,
+rested, or killed, a property that must hold for *any* correct matching engine regardless of
+implementation strategy.
 
 ## Design principles
 
