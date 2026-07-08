@@ -1,0 +1,20 @@
+# Build directories
+build/
+build-*/
+cmake-build-*/
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Sanitizer/profiling output
+*.profraw
+*.profdata
+core
