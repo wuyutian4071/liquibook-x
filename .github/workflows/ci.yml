@@ -67,12 +67,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned explicitly (not the bare "clang-format" package) so the version CI checks
+      # against can't silently drift out from under local development -- a real version
+      # mismatch (local 22.x vs this) already caused one false-negative CI failure.
       - name: Install clang-format
-        run: sudo apt-get update && sudo apt-get install -y clang-format
+        run: sudo apt-get update && sudo apt-get install -y clang-format-18
 
       - name: Check formatting
         run: |
           files=$(find . -name '*.cpp' -o -name '*.hpp' | grep -v '/build')
           if [ -n "$files" ]; then
-            clang-format --dry-run --Werror $files
+            clang-format-18 --dry-run --Werror $files
           fi

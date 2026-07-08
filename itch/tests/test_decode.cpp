@@ -269,7 +269,7 @@ TEST(Decode, Trade) {
 }
 
 TEST(Decode, EmptySpanReturnsNullopt) {
-    EXPECT_FALSE(decode(std::span<const std::byte>{}).has_value());
+    EXPECT_FALSE(decode(std::span<const std::byte> {}).has_value());
 }
 
 TEST(Decode, UnrecognizedTypeReturnsNulloptWithoutCrashing) {

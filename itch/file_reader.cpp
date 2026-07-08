@@ -19,7 +19,7 @@ ItchFileReader::ItchFileReader(const std::filesystem::path& path) {
             errno, std::generic_category(), "ItchFileReader: failed to open " + path.string());
     }
 
-    struct stat st{};
+    struct stat st {};
     if (::fstat(fd, &st) != 0) {
         const int saved_errno = errno;
         ::close(fd);

@@ -64,7 +64,7 @@ void append_header(std::vector<std::byte>& buf,
 }
 
 void write_framed(std::ostream& out, const std::vector<std::byte>& msg) {
-    std::array<std::byte, 2> len{};
+    std::array<std::byte, 2> len {};
     write_u16_be(len.data(), static_cast<std::uint16_t>(msg.size()));
     out.write(reinterpret_cast<const char*>(len.data()), 2);
     out.write(reinterpret_cast<const char*>(msg.data()), static_cast<std::streamsize>(msg.size()));
@@ -154,7 +154,7 @@ void generate(const SynthConfig& config, std::ostream& out) {
             }
             write_framed(out, msg);
 
-            live_orders[next_order_ref] = LiveOrder{symbol_index, shares, price, side};
+            live_orders[next_order_ref] = LiveOrder {symbol_index, shares, price, side};
             ++next_order_ref;
             ++orders_added;
             continue;

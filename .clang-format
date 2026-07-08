@@ -35,6 +35,7 @@ IncludeCategories:
 
 SpaceBeforeParens: ControlStatements
 SpacesInAngles: false
+SpaceBeforeCpp11BracedList: true
 
 NamespaceIndentation: None
 FixNamespaceComments: true

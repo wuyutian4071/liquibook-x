@@ -20,7 +20,7 @@ void read_chars(const std::byte* p, std::array<char, N>& out) noexcept {
 [[nodiscard]] MessageHeader decode_header(std::span<const std::byte> raw,
                                           MessageType type) noexcept {
     const auto* p = raw.data();
-    return MessageHeader{
+    return MessageHeader {
         .type = type,
         .stock_locate = read_u16_be(p + 1),
         .tracking_number = read_u16_be(p + 3),
@@ -29,14 +29,14 @@ void read_chars(const std::byte* p, std::array<char, N>& out) noexcept {
 }
 
 [[nodiscard]] DecodedMessage decode_system_event(std::span<const std::byte> raw) noexcept {
-    DecodedMessage msg{};
+    DecodedMessage msg {};
     msg.header = decode_header(raw, MessageType::SystemEvent);
     msg.payload.system_event.event_code = read_char(raw.data() + 11);
     return msg;
 }
 
 [[nodiscard]] DecodedMessage decode_stock_directory(std::span<const std::byte> raw) noexcept {
-    DecodedMessage msg{};
+    DecodedMessage msg {};
     msg.header = decode_header(raw, MessageType::StockDirectory);
     auto& payload = msg.payload.stock_directory;
     const auto* p = raw.data();
@@ -60,7 +60,7 @@ void read_chars(const std::byte* p, std::array<char, N>& out) noexcept {
 
 [[nodiscard]] DecodedMessage decode_add_order(std::span<const std::byte> raw,
                                               MessageType type) noexcept {
-    DecodedMessage msg{};
+    DecodedMessage msg {};
     msg.header = decode_header(raw, type);
     auto& payload = msg.payload.add_order;
     const auto* p = raw.data();
@@ -79,7 +79,7 @@ void read_chars(const std::byte* p, std::array<char, N>& out) noexcept {
 }
 
 [[nodiscard]] DecodedMessage decode_order_executed(std::span<const std::byte> raw) noexcept {
-    DecodedMessage msg{};
+    DecodedMessage msg {};
     msg.header = decode_header(raw, MessageType::OrderExecuted);
     auto& payload = msg.payload.order_executed;
     const auto* p = raw.data();
@@ -92,7 +92,7 @@ void read_chars(const std::byte* p, std::array<char, N>& out) noexcept {
 
 [[nodiscard]] DecodedMessage
 decode_order_executed_with_price(std::span<const std::byte> raw) noexcept {
-    DecodedMessage msg{};
+    DecodedMessage msg {};
     msg.header = decode_header(raw, MessageType::OrderExecutedWithPrice);
     auto& payload = msg.payload.order_executed_with_price;
     const auto* p = raw.data();
@@ -106,7 +106,7 @@ decode_order_executed_with_price(std::span<const std::byte> raw) noexcept {
 }
 
 [[nodiscard]] DecodedMessage decode_order_cancel(std::span<const std::byte> raw) noexcept {
-    DecodedMessage msg{};
+    DecodedMessage msg {};
     msg.header = decode_header(raw, MessageType::OrderCancel);
     auto& payload = msg.payload.order_cancel;
     const auto* p = raw.data();
@@ -117,14 +117,14 @@ decode_order_executed_with_price(std::span<const std::byte> raw) noexcept {
 }
 
 [[nodiscard]] DecodedMessage decode_order_delete(std::span<const std::byte> raw) noexcept {
-    DecodedMessage msg{};
+    DecodedMessage msg {};
     msg.header = decode_header(raw, MessageType::OrderDelete);
     msg.payload.order_delete.order_reference_number = read_u64_be(raw.data() + 11);
     return msg;
 }
 
 [[nodiscard]] DecodedMessage decode_order_replace(std::span<const std::byte> raw) noexcept {
-    DecodedMessage msg{};
+    DecodedMessage msg {};
     msg.header = decode_header(raw, MessageType::OrderReplace);
     auto& payload = msg.payload.order_replace;
     const auto* p = raw.data();
@@ -137,7 +137,7 @@ decode_order_executed_with_price(std::span<const std::byte> raw) noexcept {
 }
 
 [[nodiscard]] DecodedMessage decode_trade(std::span<const std::byte> raw) noexcept {
-    DecodedMessage msg{};
+    DecodedMessage msg {};
     msg.header = decode_header(raw, MessageType::Trade);
     auto& payload = msg.payload.trade;
     const auto* p = raw.data();
