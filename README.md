@@ -23,17 +23,17 @@
 
 ## Status
 
-Built milestone by milestone. Current: **M2 — ITCH 5.0 parser**: a real, spec-accurate
-NASDAQ TotalView-ITCH 5.0 binary decoder for all 10 message types this project needs, a
-deterministic self-consistent synthetic order-flow generator (verified by replaying the real
-decoder over its own output, not just trusted), an mmap-based zero-copy file reader, and a
-measured parser throughput benchmark (~112M messages/sec, Release, this machine).
+Built milestone by milestone. Current: **M3 — foundational containers**: the three
+allocation-free data structures `OrderBook` (M4) will be built on — an object pool, an
+intrusive doubly-linked list, and an open-addressing hash map — each independently tested,
+including a differential stress test against `std::unordered_map` and a real, verified
+zero-heap-allocation proof (not just a claim).
 
 | Milestone | Scope | State |
 |-----------|-------|-------|
 | M1 | Repo skeleton, CMake, CI (gcc+clang, Debug+ASan/UBSan, Release), clang-format | ✅ |
 | M2 | ITCH 5.0 parser + synthetic data generator + parser throughput benchmark | ✅ |
-| M3 | Object pool, intrusive list, open-addressing hash map | ⬜ |
+| M3 | Object pool, intrusive list, open-addressing hash map | ✅ |
 | M4 | OrderBook with ITCH-driven book building + differential tests vs. a reference `std::map` book | ⬜ |
 | M5 | MatchingEngine: limit/market/IOC/FOK, price-time priority | ⬜ |
 | M6 | Lock-free SPSC ring buffer + two-thread pipeline + TSan | ⬜ |
@@ -80,12 +80,41 @@ this machine (Apple Silicon, Release build, no sanitizers) — decode-only, not 
 file-read+decode+book-update pipeline. A full latency-histogram benchmark suite with
 methodology (CPU pinning, warmup, percentiles) arrives at M7.
 
+### Foundational containers (M3)
+
+`containers/object_pool.hpp`'s `ObjectPool<T>` is a fixed-capacity pool that allocates one
+contiguous buffer once at construction and never grows. Free slots are tracked via an
+intrusive free list stored *in the unused slot memory itself* (a union of `T` and the
+free-list index) — no separate bookkeeping array to touch on the hot path. Requires `T`
+trivially destructible: a pool for hot-path POD-like types, so there's never destruction
+work to run.
+
+`containers/intrusive_list.hpp`'s `IntrusiveList<T>` allocates no nodes at all — a C++20
+`concept` requires `T` to have public `prev`/`next` members, enforced with a clear compiler
+error rather than left as an undocumented convention. This is what a per-price-level FIFO
+order queue is built from directly (M4).
+
+`containers/hash_map.hpp`'s `OpenAddressingHashMap<K, V>` is fixed-capacity (rounded to a
+power of two), linear-probed (better cache behavior than double hashing), hashed with a
+splitmix64-style mix rather than `std::hash` (whose quality for sequential integer keys like
+ITCH order-reference numbers isn't guaranteed), with the standard 3-state slot marker for
+tombstone-based deletion and first-tombstone reuse on insert to keep accumulation bounded.
+Verified with a differential stress test against a `std::unordered_map` reference (2000
+random keys, insert/find/erase, checked at every step).
+
+**Zero heap allocation, actually verified**: `testing/allocation_guard.hpp` is a scoped
+allocation counter backed by a global `operator new`/`operator delete` override, used to
+directly prove `ObjectPool` and `OpenAddressingHashMap`'s hot-path operations (acquire/
+release, insert/find/erase) allocate nothing — the promise design principle #2 below made
+back at M1 is now a real, running test, not a comment.
+
 ## Design principles
 
 1. **Correctness first, then measured performance.** No latency claim ships without a
    benchmark in the repo backing it.
 2. **Zero heap allocation on the hot path.** Verified, not assumed — object pools and
-   intrusive containers throughout; a counting allocator will assert this in tests.
+   intrusive containers throughout; `testing/allocation_guard.hpp`'s counting allocator
+   asserts this directly in `containers/tests/` (M3).
 3. **No locks on the hot path.** Thread handoff uses a lock-free SPSC ring buffer (M6).
 4. **Mechanical sympathy.** Cache-line-aware layout, branch-prediction-conscious code,
    documented and benchmarked, not just asserted in a comment.
