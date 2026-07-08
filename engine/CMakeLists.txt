@@ -9,6 +9,7 @@ target_link_libraries(liquibook_engine INTERFACE liquibook_book)
 if(LIQUIBOOK_BUILD_TESTS)
     add_executable(liquibook_engine_tests
         tests/test_matching_engine.cpp
+        tests/test_matching_engine_conservation.cpp
     )
     target_link_libraries(liquibook_engine_tests PRIVATE liquibook_engine GTest::gtest_main)
     liquibook_apply_warnings(liquibook_engine_tests)
