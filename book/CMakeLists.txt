@@ -10,6 +10,7 @@ if(LIQUIBOOK_BUILD_TESTS)
     add_executable(liquibook_book_tests
         tests/test_order_book.cpp
         tests/test_order_book_differential.cpp
+        tests/test_order_book_itch_integration.cpp
     )
     target_link_libraries(liquibook_book_tests PRIVATE liquibook_book GTest::gtest_main)
     liquibook_apply_warnings(liquibook_book_tests)
