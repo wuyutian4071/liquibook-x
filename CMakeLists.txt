@@ -48,3 +48,5 @@ if(LIQUIBOOK_BUILD_BENCHMARKS)
 endif()
 
 add_subdirectory(smoke)
+add_subdirectory(itch)
+add_subdirectory(bench)
