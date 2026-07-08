@@ -8,11 +8,15 @@
 
 namespace liquibook::containers {
 
-namespace detail {
+// A different inner namespace than hash_map.hpp's own `detail` (not `detail` again):
+// mirrors its round_up_to_power_of_two exactly, duplicated locally rather than shared to
+// avoid touching already-shipped, CI-verified M3 code for the sake of a five-line utility --
+// but both headers land in the same translation unit whenever a consumer needs both
+// containers (as pipeline/itch_pipeline.hpp does, via order_book.hpp -> hash_map.hpp), so an
+// *identically named* `liquibook::containers::detail` function in each is a genuine
+// redefinition, not just redundant.
+namespace ring_buffer_detail {
 
-// Mirrors hash_map.hpp's own round_up_to_power_of_two exactly -- duplicated locally rather
-// than shared, to avoid touching already-shipped, CI-verified M3 code for the sake of a
-// five-line utility.
 [[nodiscard]] constexpr std::size_t round_up_to_power_of_two(std::size_t n) noexcept {
     if (n <= 1) {
         return 1;
@@ -20,7 +24,7 @@ namespace detail {
     return std::size_t {1} << std::bit_width(n - 1);
 }
 
-} // namespace detail
+} // namespace ring_buffer_detail
 
 // A fixed-capacity, single-producer/single-consumer circular buffer. SPSC is the simplest
 // lock-free case: because exactly one thread ever writes each index, push/pop need only
@@ -49,7 +53,7 @@ public:
     // containers::OpenAddressingHashMap's own established convention), so the physical slot
     // for a logical index can be computed with a mask instead of a modulo.
     explicit SpscRingBuffer(std::size_t capacity)
-        : capacity_(detail::round_up_to_power_of_two(capacity)), mask_(capacity_ - 1),
+        : capacity_(ring_buffer_detail::round_up_to_power_of_two(capacity)), mask_(capacity_ - 1),
           buffer_(std::make_unique<T[]>(capacity_)) {}
 
     SpscRingBuffer(const SpscRingBuffer&) = delete;
