@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <map>
 #include <optional>
 #include <vector>
@@ -42,7 +43,11 @@ public:
     // execution, not tied to a resting order -- see itch/synth.hpp's doc comment).
     void apply(const itch::DecodedMessage& msg);
 
-    bool add_order(itch::OrderRef ref, itch::Price4 price, itch::Shares shares, bool is_buy);
+    bool add_order(itch::OrderRef ref,
+                   itch::Price4 price,
+                   itch::Shares shares,
+                   bool is_buy,
+                   std::uint32_t trader_id = 0);
     bool execute_order(itch::OrderRef ref, itch::Shares executed_shares);
     bool cancel_order(itch::OrderRef ref, itch::Shares cancelled_shares);
     bool delete_order(itch::OrderRef ref);
@@ -55,6 +60,18 @@ public:
     [[nodiscard]] std::optional<itch::Price4> best_ask() const noexcept;
     [[nodiscard]] itch::Shares shares_at(itch::Price4 price, bool is_buy) const noexcept;
     [[nodiscard]] std::size_t order_count() const noexcept { return order_index_.size(); }
+
+    // Read-only access for M5's matching engine: the level object itself (not just its
+    // price), so a caller can peek at resting orders via level->bids/level->asks without
+    // OrderBook needing to know anything about matching. best_*_level() are the incrementally
+    // cached best (O(1)); next_level_after() is a real, bounded scan (mirrors
+    // recompute_best_after_level_emptied's flat-array + outlier-map pattern) used to walk
+    // multiple levels read-only -- e.g. for a Fill-Or-Kill liquidity check that must not
+    // mutate the book while probing.
+    [[nodiscard]] const PriceLevel* best_bid_level() const noexcept;
+    [[nodiscard]] const PriceLevel* best_ask_level() const noexcept;
+    [[nodiscard]] const PriceLevel* next_level_after(itch::Price4 price,
+                                                     bool is_buy) const noexcept;
 
 private:
     [[nodiscard]] bool flat_index_for(itch::Price4 price, std::size_t& out_index) const noexcept;

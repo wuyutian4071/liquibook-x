@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #include "types.hpp"
 
 namespace liquibook::book {
@@ -17,6 +19,10 @@ struct Order {
     itch::Price4 price = 0;
     itch::Shares shares = 0; // remaining (unexecuted, uncancelled) shares
     bool is_buy = false;
+    // 0 = "no trader" -- an order with trader_id 0 is never subject to self-trade
+    // prevention (M5's engine/matching_engine.hpp), matching every ITCH-driven order (which
+    // has no participant identity of its own) never being unintentionally blocked.
+    std::uint32_t trader_id = 0;
     Order* prev = nullptr;
     Order* next = nullptr;
     PriceLevel* level = nullptr;

@@ -147,7 +147,8 @@ void OrderBook::remove_order_fully(Order* order) {
 bool OrderBook::add_order(itch::OrderRef ref,
                           itch::Price4 price,
                           itch::Shares shares,
-                          bool is_buy) {
+                          bool is_buy,
+                          std::uint32_t trader_id) {
     if (shares == 0) {
         return false;
     }
@@ -165,6 +166,7 @@ bool OrderBook::add_order(itch::OrderRef ref,
     order->price = price;
     order->shares = shares;
     order->is_buy = is_buy;
+    order->trader_id = trader_id;
     order->level = level;
 
     if (is_buy) {
@@ -311,6 +313,63 @@ itch::Shares OrderBook::shares_at(itch::Price4 price, bool is_buy) const noexcep
         return 0;
     }
     return is_buy ? level->total_bid_shares : level->total_ask_shares;
+}
+
+const PriceLevel* OrderBook::best_bid_level() const noexcept {
+    return has_best_bid_ ? level_for_query(best_bid_price_) : nullptr;
+}
+
+const PriceLevel* OrderBook::best_ask_level() const noexcept {
+    return has_best_ask_ ? level_for_query(best_ask_price_) : nullptr;
+}
+
+const PriceLevel* OrderBook::next_level_after(itch::Price4 price, bool is_buy) const noexcept {
+    // Mirrors recompute_best_after_level_emptied's flat-array-scan + outlier-map-scan +
+    // pick-the-nearer pattern, parameterized by an exclusion price instead of "no exclusion"
+    // -- a read-only traversal that lets a caller (M5's matching engine) walk multiple levels
+    // without mutating the book, which naive repeated best_bid_level()/best_ask_level() calls
+    // cannot do (those only ever report the single incrementally-cached best).
+    std::optional<itch::Price4> best_in_flat;
+    if (is_buy) {
+        for (std::size_t i = flat_levels_.size(); i-- > 0;) {
+            if (flat_levels_[i].price < price && flat_levels_[i].total_bid_shares > 0) {
+                best_in_flat = flat_levels_[i].price;
+                break;
+            }
+        }
+    } else {
+        for (const auto& level : flat_levels_) {
+            if (level.price > price && level.total_ask_shares > 0) {
+                best_in_flat = level.price;
+                break;
+            }
+        }
+    }
+
+    std::optional<itch::Price4> best_in_outliers;
+    for (const auto& [outlier_price, level] : outlier_levels_) {
+        if (is_buy ? (outlier_price >= price) : (outlier_price <= price)) {
+            continue; // must be strictly worse than `price`
+        }
+        const itch::Shares shares = is_buy ? level.total_bid_shares : level.total_ask_shares;
+        if (shares == 0) {
+            continue;
+        }
+        if (!best_in_outliers ||
+            (is_buy ? outlier_price > *best_in_outliers : outlier_price < *best_in_outliers)) {
+            best_in_outliers = outlier_price;
+        }
+    }
+
+    std::optional<itch::Price4> result;
+    if (best_in_flat && best_in_outliers) {
+        result = is_buy ? std::max(*best_in_flat, *best_in_outliers)
+                        : std::min(*best_in_flat, *best_in_outliers);
+    } else {
+        result = best_in_flat ? best_in_flat : best_in_outliers;
+    }
+
+    return result ? level_for_query(*result) : nullptr;
 }
 
 } // namespace liquibook::book
