@@ -18,6 +18,9 @@ endif()
 include(cmake/Warnings.cmake)
 include(cmake/Sanitizers.cmake)
 
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+
 option(LIQUIBOOK_BUILD_TESTS "Build GoogleTest-based unit tests" ON)
 option(LIQUIBOOK_BUILD_BENCHMARKS "Build Google Benchmark microbenchmarks" OFF)
 
