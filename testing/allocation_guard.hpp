@@ -11,7 +11,17 @@
 // that rely on them (containers/tests/test_object_pool.cpp,
 // containers/tests/test_hash_map.cpp) use it to skip cleanly rather than silently always
 // pass with a counter that nothing feeds anymore.
-#if defined(__SANITIZE_THREAD__) || (defined(__has_feature) && __has_feature(thread_sanitizer))
+// GCC's preprocessor doesn't know __has_feature at all -- not even as "defined but always
+// false" -- so a single-line `defined(__has_feature) && __has_feature(...)` still fails to
+// parse on GCC (short-circuiting applies to the *value*, not to whether the right operand
+// must be syntactically valid). The portable fix, used by several major C++ codebases: give
+// __has_feature a no-op fallback definition when it doesn't already exist, so the expression
+// below is always well-formed.
+#ifndef __has_feature
+#define __has_feature(x) 0
+#endif
+
+#if defined(__SANITIZE_THREAD__) || __has_feature(thread_sanitizer)
 #define LIQUIBOOK_UNDER_TSAN 1
 #else
 #define LIQUIBOOK_UNDER_TSAN 0
