@@ -23,18 +23,18 @@
 
 ## Status
 
-Built milestone by milestone. Current: **M3 — foundational containers**: the three
-allocation-free data structures `OrderBook` (M4) will be built on — an object pool, an
-intrusive doubly-linked list, and an open-addressing hash map — each independently tested,
-including a differential stress test against `std::unordered_map` and a real, verified
-zero-heap-allocation proof (not just a claim).
+Built milestone by milestone. Current: **M4 — the order book**: a single-symbol limit order
+book combining M2's ITCH messages and M3's three containers for the first time — a flat
+array of price levels (with a fallback map for outliers), incrementally-tracked best bid/ask,
+verified both by direct unit tests and by a differential test against an independent
+reference implementation on a random operation stream.
 
 | Milestone | Scope | State |
 |-----------|-------|-------|
 | M1 | Repo skeleton, CMake, CI (gcc+clang, Debug+ASan/UBSan, Release), clang-format | ✅ |
 | M2 | ITCH 5.0 parser + synthetic data generator + parser throughput benchmark | ✅ |
 | M3 | Object pool, intrusive list, open-addressing hash map | ✅ |
-| M4 | OrderBook with ITCH-driven book building + differential tests vs. a reference `std::map` book | ⬜ |
+| M4 | OrderBook with ITCH-driven book building + differential tests vs. a reference `std::map` book | ✅ |
 | M5 | MatchingEngine: limit/market/IOC/FOK, price-time priority | ⬜ |
 | M6 | Lock-free SPSC ring buffer + two-thread pipeline + TSan | ⬜ |
 | M7 | Full benchmark suite + `BENCHMARKS.md` (methodology + results) | ⬜ |
@@ -107,6 +107,44 @@ allocation counter backed by a global `operator new`/`operator delete` override,
 directly prove `ObjectPool` and `OpenAddressingHashMap`'s hot-path operations (acquire/
 release, insert/find/erase) allocate nothing — the promise design principle #2 below made
 back at M1 is now a real, running test, not a comment.
+
+**A real bug the tests caught immediately**, worth keeping as a reminder that this
+discipline pays for itself: M4's initial `remove_order_fully()` forgot to decrement a price
+level's aggregate share counters when an order was removed via `delete_order`/`replace_order`
+— that decrement only happened on the execute/cancel path. 4 of 18 new `OrderBook` unit tests
+failed immediately, pinpointing exactly which best-bid/ask transitions were wrong; fixed by
+decrementing unconditionally regardless of how an order reaches full removal.
+
+### The order book (M4)
+
+`book/order_book.hpp`'s `OrderBook` is the first module to consume M2's ITCH messages and
+M3's three containers together. Price levels live in a flat array indexed by raw
+`Price4`-unit offset from a reference price — a real, stated design choice: "tick" here means
+one raw `Price4` unit (1/10000 of a dollar), not a market-specific minimum increment, because
+M2's synthetic generator doesn't guarantee prices align to any coarser tick, and bucketing by
+a market tick without that guarantee would silently collide distinct prices. Prices outside
+the flat array's window fall back to a `std::map`. Orders live in M3's `ObjectPool`, indexed
+by order reference via M3's `OpenAddressingHashMap`, and rest in per-price-level, per-side
+`IntrusiveList` FIFOs — each `Order` carries a back-pointer to its own price level, so
+cancel/execute/delete never re-derive a price -> level mapping.
+
+Best bid/ask are cached and updated incrementally, never scanned on the fast path: O(1) when
+a new order improves the best, and only a bounded walk (never a full scan) when the *current*
+best level's side empties — bounded by the configured flat-array width, not literally O(1) in
+the strict worst-case sense, described that way rather than oversold.
+
+Three kinds of verification, matching the milestone's own requirements:
+- **Direct unit tests** (`test_order_book.cpp`) — add/execute/cancel/delete/replace
+  correctness, best-bid/ask transitions including the level-empties-and-walks case, and the
+  flat-array/fallback-map boundary exactly at the edge of the window.
+- **A differential test** (`test_order_book_differential.cpp`) against a deliberately simple,
+  obviously-correct `ReferenceOrderBook` (plain hash map, O(n) scans) — a random,
+  self-consistent stream of operations applied to both books in lockstep, comparing best
+  bid/ask, order count, and shares at *every* price the run ever touched (not just top of
+  book) after every single operation.
+- **An ITCH-driven integration test** (`test_order_book_itch_integration.cpp`) — a real
+  synthetic ITCH stream (M2's `generate()`), decoded with M2's real `decode()`, fed through
+  `OrderBook::apply()` end to end, checked against independently-tracked expected state.
 
 ## Design principles
 
