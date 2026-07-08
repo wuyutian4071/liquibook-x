@@ -143,6 +143,10 @@ TEST(HashMap, StressAgainstUnorderedMapReference) {
 }
 
 TEST(HashMap, InsertFindEraseAllocateNoHeapMemory) {
+#if LIQUIBOOK_UNDER_TSAN
+    GTEST_SKIP() << "allocation_guard's operator new/delete override is disabled under TSan "
+                    "(it would conflict with TSan's own runtime allocator interception)";
+#else
     OpenAddressingHashMap<std::uint64_t, int> map(64);
     // Warm up outside the guarded region.
     for (std::uint64_t i = 0; i < 32; ++i) {
@@ -167,4 +171,5 @@ TEST(HashMap, InsertFindEraseAllocateNoHeapMemory) {
         const std::size_t allocations = guard.count();
         EXPECT_EQ(allocations, 0u);
     }
+#endif // LIQUIBOOK_UNDER_TSAN
 }

@@ -3,6 +3,20 @@
 #include <atomic>
 #include <cstddef>
 
+// Detects a ThreadSanitizer build. TSan ships its own operator new/delete overrides in its
+// runtime (libclang_rt.tsan_cxx) that it needs for its own allocation tracking to work
+// correctly -- linking a second, user-defined set of overrides alongside it is a genuine ODR
+// violation ("multiple definition of operator new") at link time, not just unnecessary.
+// allocation_guard.cpp uses this to omit its overrides entirely under TSan; the two tests
+// that rely on them (containers/tests/test_object_pool.cpp,
+// containers/tests/test_hash_map.cpp) use it to skip cleanly rather than silently always
+// pass with a counter that nothing feeds anymore.
+#if defined(__SANITIZE_THREAD__) || (defined(__has_feature) && __has_feature(thread_sanitizer))
+#define LIQUIBOOK_UNDER_TSAN 1
+#else
+#define LIQUIBOOK_UNDER_TSAN 0
+#endif
+
 // A global operator new/delete override (defined once in allocation_guard.cpp -- replacement
 // new/delete must have external linkage, so it can't live in this header) that counts
 // allocations while an AllocationGuard is active, so a test can assert a hot-path operation

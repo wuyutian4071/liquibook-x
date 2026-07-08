@@ -91,6 +91,10 @@ TEST(ObjectPool, ZeroCapacityPoolAlwaysReturnsNullptr) {
 }
 
 TEST(ObjectPool, AcquireReleaseCycleAllocatesNoHeapMemory) {
+#if LIQUIBOOK_UNDER_TSAN
+    GTEST_SKIP() << "allocation_guard's operator new/delete override is disabled under TSan "
+                    "(it would conflict with TSan's own runtime allocator interception)";
+#else
     ObjectPool<Point> pool(16);
     // Warm up: touch every slot once outside the guarded region so any one-time lazy
     // initialization (there isn't any here, but this keeps the test robust to future
@@ -115,4 +119,5 @@ TEST(ObjectPool, AcquireReleaseCycleAllocatesNoHeapMemory) {
         const std::size_t allocations = guard.count();
         EXPECT_EQ(allocations, 0u);
     }
+#endif // LIQUIBOOK_UNDER_TSAN
 }

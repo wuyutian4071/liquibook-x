@@ -17,6 +17,11 @@ std::atomic<bool>& counting_enabled() noexcept {
 
 } // namespace liquibook::testing
 
+// See allocation_guard.hpp's LIQUIBOOK_UNDER_TSAN comment: these overrides are omitted
+// entirely under TSan, which needs its own runtime new/delete for its allocation tracking to
+// work -- linking both is a link-time ODR violation, not merely redundant.
+#if !LIQUIBOOK_UNDER_TSAN
+
 void* operator new(std::size_t size) {
     if (liquibook::testing::counting_enabled().load(std::memory_order_relaxed)) {
         liquibook::testing::allocation_counter().fetch_add(1, std::memory_order_relaxed);
@@ -74,3 +79,5 @@ void operator delete(void* ptr, const std::nothrow_t&) noexcept {
 void operator delete[](void* ptr, const std::nothrow_t&) noexcept {
     std::free(ptr);
 }
+
+#endif // !LIQUIBOOK_UNDER_TSAN
