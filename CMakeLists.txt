@@ -49,4 +49,5 @@ endif()
 
 add_subdirectory(smoke)
 add_subdirectory(itch)
+add_subdirectory(containers)
 add_subdirectory(bench)
