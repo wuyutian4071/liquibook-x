@@ -19,14 +19,20 @@
   fail if it were wrong (differential testing against a reference implementation, not just
   example-based tests), and the CI matrix runs sanitizer-clean (ASan/UBSan, later TSan) across
   both gcc and clang.
-- **Results:** _(populated as milestones land — see `BENCHMARKS.md` once M7 exists)._
+- **Results:** ITCH decode at 112M messages/sec; sub-100ns P99 for `OrderBook` add/cancel/
+  execute and `MatchingEngine` matches that don't empty a price level; a 140x-slower P50 for
+  matches that *do* (an honestly-quantified, previously-only-qualitative design tradeoff);
+  164M items/sec through the lock-free ring buffer's two-thread pipeline. Full methodology
+  (CPU pinning, warmup, percentile computation) and every table — see
+  **[`BENCHMARKS.md`](BENCHMARKS.md)**.
 
 ## Status
 
-Built milestone by milestone. Current: **M6 — concurrency**: a lock-free single-producer/
-single-consumer ring buffer decouples ITCH parsing from book-building onto two real OS
-threads, with a dedicated ThreadSanitizer CI job verifying the memory ordering is actually
-correct, not just "looks right."
+Built milestone by milestone. Current: **M7 — benchmarks**: a latency-percentile harness
+(`bench/latency_histogram.hpp`) measures P50/P90/P99/P99.9 for individual operations across
+`OrderBook`, `MatchingEngine`, and `SpscRingBuffer` — a different, complementary measurement
+to M2's existing throughput benchmark — with an honest, stated methodology and at least one
+real, previously-only-qualitative finding now empirically quantified.
 
 | Milestone | Scope | State |
 |-----------|-------|-------|
@@ -36,7 +42,7 @@ correct, not just "looks right."
 | M4 | OrderBook with ITCH-driven book building + differential tests vs. a reference `std::map` book | ✅ |
 | M5 | MatchingEngine: limit/market/IOC/FOK, price-time priority | ✅ |
 | M6 | Lock-free SPSC ring buffer + two-thread pipeline + TSan | ✅ |
-| M7 | Full benchmark suite + `BENCHMARKS.md` (methodology + results) | ⬜ |
+| M7 | Full benchmark suite + `BENCHMARKS.md` (methodology + results) | ✅ |
 | M8 | Polished README, architecture diagram, design-decisions doc | ⬜ |
 
 ## Quickstart
@@ -76,8 +82,8 @@ generator's own bookkeeping but by replaying the real `decode()` over its output
 
 **Measured, not assumed**: `bench_parser` reports ~112M messages/sec decode throughput on
 this machine (Apple Silicon, Release build, no sanitizers) — decode-only, not the full
-file-read+decode+book-update pipeline. A full latency-histogram benchmark suite with
-methodology (CPU pinning, warmup, percentiles) arrives at M7.
+file-read+decode+book-update pipeline. Per-operation latency percentiles for every other
+subsystem, with full methodology, are in `BENCHMARKS.md` (M7).
 
 ### Foundational containers (M3)
 
@@ -243,6 +249,38 @@ wiring the pipeline together: `hash_map.hpp` and the ring buffer both defined
 `liquibook::containers::detail::round_up_to_power_of_two` — harmless individually, but a
 genuine redefinition once a consumer (the pipeline) included both in one translation unit;
 fixed by giving the ring buffer's copy its own, differently-named inner namespace.
+
+### The benchmark suite (M7)
+
+M2's `bench_parser.cpp` already answers "how many messages/sec" via a Google Benchmark
+throughput loop — the right tool for that question, but not for "what's the P99.9 latency of
+one `OrderBook::add_order()` call," which needs each operation timed *individually* and the
+resulting samples sorted, not a loop-body average across repetitions. `bench/
+latency_histogram.hpp`'s `LatencyHistogram` is the small piece of infrastructure that was
+actually missing: `record()` one raw nanosecond sample per operation, `compute()` sorts a
+copy and reports P50/P90/P99/P99.9/max plus the mean.
+
+Three new custom-harness executables (their own `main()`, not `BENCHMARK_MAIN()`) apply it:
+`bench_order_book_latency` (`add_order`/`cancel_order`/`execute_order`/`best_bid`/
+`shares_at`), `bench_matching_engine_latency` (`submit()` for a full match, a rest-only
+Limit, and an IOC partial fill — measured separately since they take genuinely different
+code paths), and `bench_ring_buffer_latency` (single-threaded `push`/`pop`, plus a real
+two-thread sustained-throughput run). `pin_current_thread_to_cpu()` is real CPU pinning on
+Linux, a documented no-op elsewhere — macOS has no public equivalent affinity API, stated
+plainly in `BENCHMARKS.md` rather than glossed over.
+
+**A design tradeoff, previously only qualitative, now empirically quantified**: `MatchingEngine`
+scenarios that empty a price level (a full match, an IOC that fully drains the resting order)
+measure roughly 140x slower than one that just rests — because emptying a level triggers
+`OrderBook`'s own already-documented "bounded walk... bounded by the configured flat-array
+width" rescan. The benchmark deliberately constructs the worst case (the resting order is
+always the sole occupant of its level, so this happens on every single match, not as a rare
+edge case) and says so directly in its own comments — the honest way to report a real cost
+is to measure it and explain it, not to omit the scenario that makes a number look worse.
+
+Full methodology (hardware, CPU pinning caveats, warmup/sampling counts, a stated caveat
+about `std::chrono::steady_clock`'s own resolution floor showing up in several sub-50ns
+numbers) and every results table: **[`BENCHMARKS.md`](BENCHMARKS.md)**.
 
 ## Design principles
 
