@@ -23,11 +23,10 @@
 
 ## Status
 
-Built milestone by milestone. Current: **M5 — the matching engine**: `MatchingEngine`
-matches incoming Limit/Market/IOC/FOK orders against M4's `OrderBook` in strict price-time
-priority, with Fill-Or-Kill atomicity (verified as zero mutation on rejection, not just zero
-fills) and optional self-trade prevention — exercised by direct scenario tests plus a
-conservation check across a random stream of all four order types.
+Built milestone by milestone. Current: **M6 — concurrency**: a lock-free single-producer/
+single-consumer ring buffer decouples ITCH parsing from book-building onto two real OS
+threads, with a dedicated ThreadSanitizer CI job verifying the memory ordering is actually
+correct, not just "looks right."
 
 | Milestone | Scope | State |
 |-----------|-------|-------|
@@ -36,7 +35,7 @@ conservation check across a random stream of all four order types.
 | M3 | Object pool, intrusive list, open-addressing hash map | ✅ |
 | M4 | OrderBook with ITCH-driven book building + differential tests vs. a reference `std::map` book | ✅ |
 | M5 | MatchingEngine: limit/market/IOC/FOK, price-time priority | ✅ |
-| M6 | Lock-free SPSC ring buffer + two-thread pipeline + TSan | ⬜ |
+| M6 | Lock-free SPSC ring buffer + two-thread pipeline + TSan | ✅ |
 | M7 | Full benchmark suite + `BENCHMARKS.md` (methodology + results) | ⬜ |
 | M8 | Polished README, architecture diagram, design-decisions doc | ⬜ |
 
@@ -198,6 +197,53 @@ every single `submit()` call's incoming quantity is accounted for exactly once a
 rested, or killed, a property that must hold for *any* correct matching engine regardless of
 implementation strategy.
 
+### Concurrency: the SPSC ring buffer and two-thread pipeline (M6)
+
+`containers/spsc_ring_buffer.hpp`'s `SpscRingBuffer<T>` is this project's first genuinely
+concurrent code. Single-producer/single-consumer is the simplest lock-free case: because
+exactly one thread ever writes each index, `push`/`pop` need only plain atomic load/store
+with acquire/release ordering — no compare-exchange, no `fetch_add`, no retry loop, since
+that machinery exists specifically to arbitrate between *multiple* writers to the same index
+(MPSC/MPMC), which doesn't apply here. `write_index_`/`read_index_` are each padded onto
+their own 64-byte cache line — the first concrete delivery on design principle #4
+("mechanical sympathy... not just asserted in a comment"), since without it the producer and
+consumer would false-share one line and force coherence traffic between cores on every single
+push/pop even though the two threads never touch each other's index. Both indices increase
+monotonically forever rather than wrapping (only the physical slot wraps, via a mask) — the
+standard technique that avoids the "does `read == write` mean empty or full?" ambiguity naive
+circular buffers hit.
+
+`pipeline/itch_pipeline.hpp`'s `run_itch_pipeline()` puts the ring buffer to real use: a
+producer thread decodes a real ITCH stream with M2's `decode()` and pushes each message into
+the buffer; a consumer thread pops and applies each one to an `OrderBook` via M4's real
+`apply()` — decoupling parsing from book-building onto separate threads, the realistic
+architecture a real feed handler uses so a slow matching/book-building thread never blocks
+the parser, and vice versa.
+
+**Verified where it counts**: a dedicated `tsan` CI job (`.github/workflows/ci.yml`) builds
+the whole suite with `-fsanitize=thread` and runs it on real Linux hardware — this is what
+actually proves the acquire/release reasoning above is correct, not just plausible-sounding.
+The concurrent tests themselves are deliberately adversarial: `SpscRingBuffer`'s own stress
+test drives 200,000 items through a capacity-64 buffer (constant wraparound, not a rare edge
+case); the pipeline test uses a capacity-32 buffer so the two threads genuinely contend rather
+than the producer racing ahead and finishing first.
+
+**Two real, environment-specific bugs this process caught**, worth keeping as a reminder of
+why CI-only verification exists: (1) TSan's own runtime ships its own `operator new`/`delete`
+overrides, which collided at *link time* with M3's `allocation_guard.cpp` (a genuine ODR
+violation, not a false alarm) — fixed by gating `allocation_guard.cpp`'s overrides behind a
+`LIQUIBOOK_UNDER_TSAN` macro, with the two dependent zero-allocation tests `GTEST_SKIP()`ing
+cleanly under TSan rather than silently always passing with a counter nothing feeds anymore.
+(2) That macro's first version used `defined(__has_feature) && __has_feature(...)`, which
+fails to *parse* on GCC (GCC doesn't know `__has_feature` at all, and short-circuiting a `&&`
+applies to its *value*, not to whether the right operand needs to be syntactically valid) —
+fixed with the portable `#define __has_feature(x) 0` fallback idiom several major C++
+codebases use for exactly this. A third, non-environment-specific bug also surfaced while
+wiring the pipeline together: `hash_map.hpp` and the ring buffer both defined
+`liquibook::containers::detail::round_up_to_power_of_two` — harmless individually, but a
+genuine redefinition once a consumer (the pipeline) included both in one translation unit;
+fixed by giving the ring buffer's copy its own, differently-named inner namespace.
+
 ## Design principles
 
 1. **Correctness first, then measured performance.** No latency claim ships without a
@@ -205,9 +251,11 @@ implementation strategy.
 2. **Zero heap allocation on the hot path.** Verified, not assumed — object pools and
    intrusive containers throughout; `testing/allocation_guard.hpp`'s counting allocator
    asserts this directly in `containers/tests/` (M3).
-3. **No locks on the hot path.** Thread handoff uses a lock-free SPSC ring buffer (M6).
+3. **No locks on the hot path.** Thread handoff uses a lock-free SPSC ring buffer, TSan-
+   verified in CI (M6).
 4. **Mechanical sympathy.** Cache-line-aware layout, branch-prediction-conscious code,
-   documented and benchmarked, not just asserted in a comment.
+   documented and benchmarked, not just asserted in a comment — the SPSC ring buffer's
+   cache-line-padded indices (M6) are the first concrete instance of this, not just a claim.
 
 ## License
 
