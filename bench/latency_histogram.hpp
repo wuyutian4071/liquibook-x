@@ -78,7 +78,7 @@ private:
 #ifdef __linux__
     cpu_set_t cpu_set;
     CPU_ZERO(&cpu_set);
-    CPU_SET(cpu_id, &cpu_set);
+    CPU_SET(static_cast<std::size_t>(cpu_id), &cpu_set);
     return pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpu_set) == 0;
 #else
     return false;
